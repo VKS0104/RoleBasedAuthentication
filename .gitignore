@@ -1,0 +1,22 @@
+# Dependencies
+**/node_modules/
+
+# Environment files and secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Build output
+**/dist/
+**/build/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Editor settings
+.vscode/
+.idea/
+GOOGLE_OAUTH_TUTORIAL.MD
