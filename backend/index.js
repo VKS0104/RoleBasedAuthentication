@@ -1,11 +1,6 @@
-require("dotenv").config();
+const dotenv = require("dotenv")
 
-// const { OAuth2Client } = require("google-auth-library");
-
-// const googleClient = new OAuth2Client(
-//   process.env.GOOGLE_CLIENT_ID
-// );
-
+dotenv.config();
 
 let express = require('express')
 let app = express()
@@ -14,33 +9,31 @@ let bcrypt = require('bcryptjs')
 let cors = require('cors')
 let jwt = require('jsonwebtoken')
 let crypto = require('crypto')
-let {sendEmail} = require('./config/sendEmail.js')
+let { sendEmail } = require('./config/sendEmail.js')
 
 const { User, Product } = require('./DataBase/rdbms.js')
 
 app.use(express.json())
 
 app.use(cors())
-mongoose.connect('mongodb://127.0.0.1:27017/rdbms').then(()=>{
+mongoose.connect('mongodb://127.0.0.1:27017/rdbms').then(() => {
   console.log('db connected succesfully.....');
-  
+
 })
 
-app.post('/signUp',async (req,res)=>{
-  let {name,email,password,role} = req.body;
+app.post('/signUp', async (req, res) => {
+  let { name, email, password, role } = req.body;
 
-  let findData = await User.findOne({email})
-  if(findData)
-  {
+  let findData = await User.findOne({ email })
+  if (findData) {
     return res.send("User Already Exist, Please Login")
   }
-  else
-  {
-    let hashedPass = await bcrypt.hash(password,10);
+  else {
+    let hashedPass = await bcrypt.hash(password, 10);
     let UserInfo = new User({
       name,
       email,
-      password:hashedPass,
+      password: hashedPass,
       role: role || 'user',
     })
 
@@ -50,75 +43,67 @@ app.post('/signUp',async (req,res)=>{
 })
 
 
-app.post('/login',async (req,res)=>{
-  let {email,password} = req.body;
-  let findData =await User.findOne({email})
+app.post('/login', async (req, res) => {
+  let { email, password } = req.body;
+  let findData = await User.findOne({ email })
 
-  if(!findData)
-  {
+  if (!findData) {
     return res.send("Kripa SignUp Kare")
   }
-  else
-  {
-    let isUser = await bcrypt.compare(password,findData.password);
-    if(!isUser)
-    {
+  else {
+    let isUser = await bcrypt.compare(password, findData.password);
+    if (!isUser) {
       return res.send("galat hai galat hai pass galat hai")
     }
-    else
-    {
-      let token = jwt.sign({userId:findData._id,name:findData.name,email:findData.email,role:findData.role},"secretkeyhai");
+    else {
+      let token = jwt.sign({ userId: findData._id, name: findData.name, email: findData.email, role: findData.role }, process.env.JWT_SECRET);
       return res.json({
-        msg:"hi",
-        token:token,
+        msg: "hi",
+        token: token,
       })
     }
   }
 })
 
-let auth=(req,res,next)=>{
+let auth = (req, res, next) => {
   let token = req.headers.authorization;
 
-  if(!token)
-  {
+  if (!token) {
     return res.send("aapke paass token nahi hai")
   }
-  else
-  {
-    let decode = jwt.verify(token,"secretkeyhai")
-
-    console.log(decode,"decoding");
-    
-    req.user = decode;
-    next();
+  else {
+    try {
+      const decode = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = decode;
+      next();
+    } catch (error) {
+      return res.status(401).send("Invalid or expired token");
+    }
   }
 }
 
-let roleCheck =(role)=>{
+let roleCheck = (role) => {
 
-  return (req,res,next)=>{
-    if(req.user.role!==role)
-    {
+  return (req, res, next) => {
+    if (req.user.role !== role) {
       return res.send("who are you")
     }
-    else
-    {
+    else {
       return next();
     }
   }
 
 }
 
-app.get('/admin',auth,roleCheck('admin'),(req,res)=>{
-  
+app.get('/admin', auth, roleCheck('admin'), (req, res) => {
+
   res.send("Only admin can access it")
 })
 
-app.get('/me',auth,async (req,res)=>{
+app.get('/me', auth, async (req, res) => {
   let user = await User.findById(req.user.userId);
 
-  if(!user)
-  {
+  if (!user) {
     return res.status(404).send("User not found");
   }
 
@@ -127,20 +112,19 @@ app.get('/me',auth,async (req,res)=>{
     email: user.email,
     role: user.role
   });
-  
+
 })
 
-app.put('/me',auth,async (req,res)=>{
+app.put('/me', auth, async (req, res) => {
 
-  let {name}=req.body
+  let { name } = req.body
 
   let user = await User.findByIdAndUpdate(
     req.user.userId,
-    {name:name},
-    {new:true}
+    { name: name },
+    { new: true }
   )
-  if(!user)
-  {
+  if (!user) {
     return res.status(404).send("User not found");
   }
 
@@ -152,41 +136,39 @@ app.put('/me',auth,async (req,res)=>{
 
 })
 
-app.get('/users',auth,roleCheck('admin'),async (req,res)=>{
-   let users = await User.find().select('-password')
+app.get('/users', auth, roleCheck('admin'), async (req, res) => {
+  let users = await User.find().select('-password')
   res.json(users);
 })
 
 
-app.patch('/users/:id/role',auth,roleCheck("admin"),async (req,res)=>{
-  let {role} =req.body;
-  if(role !== "user" && role !== "admin")
-    {
-        return res.status(400).send("Invalid role");
-    }
+app.patch('/users/:id/role', auth, roleCheck("admin"), async (req, res) => {
+  let { role } = req.body;
+  if (role !== "user" && role !== "admin") {
+    return res.status(400).send("Invalid role");
+  }
 
-    let user = await User.findByIdAndUpdate(
-        req.params.id,
-        {role},
-        {new:true}
-    );
+  let user = await User.findByIdAndUpdate(
+    req.params.id,
+    { role },
+    { new: true }
+  );
 
-    if(!user)
-    {
-        return res.status(404).send("User not found");
-    }
+  if (!user) {
+    return res.status(404).send("User not found");
+  }
 
-    res.json({
-        name: user.name,
-        email: user.email,
-        role: user.role
-    });
+  res.json({
+    name: user.name,
+    email: user.email,
+    role: user.role
+  });
 })
 
-app.post('/orders',auth,async (req,res)=>{
+app.post('/orders', auth, async (req, res) => {
   let userId = req.user.userId;
 
-  let {productName,amount} = req.body;
+  let { productName, amount } = req.body;
   let Prod_Details = new Product({
     userId,
     productName,
@@ -194,22 +176,21 @@ app.post('/orders',auth,async (req,res)=>{
   })
 
   console.log(Prod_Details);
-  
+
   await Prod_Details.save();
   res.send("done dana dan done")
 
 
 })
 
-app.get('/my-orders',auth,async (req,res)=>{
+app.get('/my-orders', auth, async (req, res) => {
   let userId = req.user.userId;
-  let findOrder = await Product.find({userId})
+  let findOrder = await Product.find({ userId })
 
-  if(findOrder)
-  {
+  if (findOrder) {
     res.json(findOrder)
   }
-  else{
+  else {
     res.send("aapne koi order nahi kiya hai")
   }
 })
@@ -222,14 +203,14 @@ app.post('/forgot-password', async (req, res) => {
       return res.status(404).send('User not found');
     }
 
-  
+
     const resetToken = crypto.randomBytes(20).toString('hex');
     user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; 
+    user.resetTokenExpiry = Date.now() + 3600000;
     await user.save();
 
 
-    const resetUrl =`http://localhost:5173/reset-password/${resetToken}`;
+    const resetUrl = `http://localhost:5173/reset-password/${resetToken}`;
 
     // `${req.protocol}://${req.get('host')}/api/reset-password/${resetToken}`
     await sendEmail(
@@ -245,27 +226,25 @@ app.post('/forgot-password', async (req, res) => {
 });
 
 
-app.post('/api/reset-password/:resetToken',async (req,res)=>{
-  let {resetToken} = req.params;
-  let {newPassword} = req.body;
+app.post('/api/reset-password/:resetToken', async (req, res) => {
+  let { resetToken } = req.params;
+  let { newPassword } = req.body;
 
-  if(!newPassword)
-  {
+  if (!newPassword) {
     return res.status(400).send("New password is required");
   }
 
-  let findUser = await User.findOne({resetToken})
+  let findUser = await User.findOne({ resetToken })
 
-  if(!findUser)
-  {
+  if (!findUser) {
     return res.status(404).send("Invalid ResetTOken")
   }
 
   if (findUser.resetTokenExpiry < Date.now()) {
-      return res.status(400).send("Reset token has expired");
+    return res.status(400).send("Reset token has expired");
   }
 
-  let hashedPass = await bcrypt.hash(newPassword,10);
+  let hashedPass = await bcrypt.hash(newPassword, 10);
 
   findUser.password = hashedPass;
   findUser.resetToken = undefined;
@@ -279,20 +258,20 @@ app.post('/api/reset-password/:resetToken',async (req,res)=>{
 
 //try catch
 
-app.get('/error',(req,res)=>{
+app.get('/error', (req, res) => {
 
-  try{
-    let user= null;
+  try {
+    let user = null;
     console.log(user.name);
     console.log("chala kya?");
     res.send("Hello")
-    
-    
+
+
   }
-  catch(err){
+  catch (err) {
     console.log(err);
-    res.send("error aayagay hai",err)
-    
+    res.send("error aayagay hai", err)
+
   }
 })
 
@@ -300,6 +279,6 @@ app.get('/error',(req,res)=>{
 
 
 
-app.listen(3000,()=>{
+app.listen(3000, () => {
   console.log("server runninggggg......");
 })
