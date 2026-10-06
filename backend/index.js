@@ -9,9 +9,15 @@ let bcrypt = require('bcryptjs')
 let cors = require('cors')
 let jwt = require('jsonwebtoken')
 let crypto = require('crypto')
+let twilio = require("twilio")
+const {oAuth2Client} = require("google-auth-library")
 let { sendEmail } = require('./config/sendEmail.js')
 
-const { User, Product } = require('./DataBase/rdbms.js')
+const { User, Product, PendingSignup } = require('./DataBase/rdbms.js')
+let twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+)
 
 app.use(express.json())
 
@@ -21,26 +27,146 @@ mongoose.connect('mongodb://127.0.0.1:27017/rdbms').then(() => {
 
 })
 
-app.post('/signUp', async (req, res) => {
-  let { name, email, password, role } = req.body;
+function normalizePhone(phone) {
+  let cleanedPhone = String(phone || "").replace(/\s+/g, "");
 
-  let findData = await User.findOne({ email })
-  if (findData) {
-    return res.send("User Already Exist, Please Login")
+  if (/^\d{10}$/.test(cleanedPhone)) {
+    return `+91${cleanedPhone}`;
   }
-  else {
+
+  if (/^\+\d{10,15}$/.test(cleanedPhone)) {
+    return cleanedPhone;
+  }
+
+  return null;
+}
+
+// const googleClient = new OAuth2Client({
+//   clientId: process.env.GOOGLE_CLIENT_ID,
+//   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+//   redirectUri: process.env.GOOGLE_REDIRECT_URI,
+// });
+// const googleScopes = ["openid", "email", "profile"];
+
+
+app.post("/signUp", async (req, res) => {
+  try {
+    let { name, email, password, phone, role } = req.body;
+    let normalizedPhone = normalizePhone(phone);
+
+    if (!name || !email || !password || !phone) {
+      return res.status(400).send("Name, email, password, and phone are required");
+    }
+
+    if (!normalizedPhone) {
+      return res.status(400).send("Phone must be 10 digits or E.164 format like +918617703377");
+    }
+
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_VERIFY_SERVICE_SID) {
+      return res.status(500).send("Twilio environment variables are missing");
+    }
+
+    let existingEmail = await User.findOne({ email });
+    if (existingEmail) {
+      return res.status(409).send("User already exists, please login");
+    }
+
+    let existingPhone = await User.findOne({ phone: normalizedPhone });
+    if (existingPhone) {
+      return res.status(409).send("Phone number already exists, please login");
+    }
+
     let hashedPass = await bcrypt.hash(password, 10);
-    let UserInfo = new User({
+
+    await PendingSignup.deleteMany({
+      $or: [{ email }, { phone: normalizedPhone }],
+    });
+
+    await PendingSignup.create({
       name,
       email,
+      phone: normalizedPhone,
       password: hashedPass,
-      role: role || 'user',
-    })
+      role: role || "user",
+    });
+
+    await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+      .verifications.create({
+        to: normalizedPhone,
+        channel: "sms",
+      });
+
+    return res.status(200).json({
+      msg: "Verification code sent",
+      email,
+      phone: normalizedPhone,
+    });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).send("Error sending verification code: " + error.message);
+  }
+});
+
+app.post("/verify-signup-phone", async (req, res) => {
+  try {
+    let { email, phone, code } = req.body;
+    let normalizedPhone = normalizePhone(phone);
+
+    if (!email || !phone || !code) {
+      return res.status(400).send("Email, phone, and verification code are required");
+    }
+
+    if (!normalizedPhone) {
+      return res.status(400).send("Phone must be 10 digits or E.164 format like +918617703377");
+    }
+
+    let pendingSignup = await PendingSignup.findOne({ email, phone: normalizedPhone });
+    if (!pendingSignup) {
+      return res.status(404).send("Signup request expired. Please sign up again");
+    }
+
+    let existingEmail = await User.findOne({ email });
+    if (existingEmail) {
+      return res.status(409).send("User already exists, please login");
+    }
+
+    let existingPhone = await User.findOne({ phone: normalizedPhone });
+    if (existingPhone) {
+      return res.status(409).send("Phone number already exists, please login");
+    }
+
+    let verificationCheck = await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SERVICE_SID)
+      .verificationChecks.create({
+        to: normalizedPhone,
+        code,
+      });
+
+    if (verificationCheck.status !== "approved") {
+      return res.status(400).send("Invalid verification code");
+    }
+
+    let UserInfo = new User({
+      name: pendingSignup.name,
+      email: pendingSignup.email,
+      phone: normalizedPhone,
+      password: pendingSignup.password,
+      role: pendingSignup.role || "user",
+      isPhoneVerified: true,
+    });
 
     await UserInfo.save();
-    res.send("dooooneeee.....")
+    await PendingSignup.deleteOne({ _id: pendingSignup._id });
+
+    return res.status(201).send("Signup complete");
+  } catch (error) {
+    console.log(error);
+    return res.status(500).send("Error verifying phone: " + error.message);
   }
-})
+});
+
+
 
 
 app.post('/login', async (req, res) => {
@@ -56,7 +182,16 @@ app.post('/login', async (req, res) => {
       return res.send("galat hai galat hai pass galat hai")
     }
     else {
-      let token = jwt.sign({ userId: findData._id, name: findData.name, email: findData.email, role: findData.role }, process.env.JWT_SECRET);
+      const token = jwt.sign(
+        {
+          userId: findData._id,
+          name: findData.name,
+          email: findData.email,
+          role: findData.role,
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: "1h" }
+      );
       return res.json({
         msg: "hi",
         token: token,
